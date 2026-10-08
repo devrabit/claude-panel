@@ -442,9 +442,9 @@ struct PanelView: View {
           .font(.system(size: 13, weight: .medium))
           .foregroundStyle(.white)
           .lineLimit(1)
-        Text(server.statusLabel)
+        Text(model.isChecking ? "Revisando…" : server.statusLabel)
           .font(.system(size: 11))
-          .foregroundStyle(color(server.health).opacity(0.95))
+          .foregroundStyle(color(server.health).opacity(model.isChecking ? 0.55 : 0.95))
         if let reason = server.reason {
           Text(reason)
             .font(.system(size: 11))

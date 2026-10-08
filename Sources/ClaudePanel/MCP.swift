@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum McpHealth: String, Codable {
@@ -175,6 +176,8 @@ enum ClaudeLocator {
     timeout: TimeInterval
   ) -> CommandResult {
     let process = Process()
+    // Process ya abre un grupo propio. Al cerrarlo también se cierra el MCP
+    // hijo; si no, el pipe queda abierto y el panel no vuelve a leer el estado.
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
     if let cwd { process.currentDirectoryURL = cwd }
@@ -184,33 +187,54 @@ enum ClaudeLocator {
     process.standardOutput = out
     process.standardError = err
 
+    let finished = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in finished.signal() }
+
     do {
       try process.run()
     } catch {
       return CommandResult(stdout: "", stderr: error.localizedDescription, code: 1, timedOut: false)
     }
 
-    let timedOut = TimedFlag()
-    let timer = DispatchSource.makeTimerSource(queue: .global())
-    timer.schedule(deadline: .now() + timeout)
-    timer.setEventHandler {
-      if process.isRunning {
-        timedOut.value = true
-        process.terminate()
-      }
+    let group = process.processIdentifier
+    let stdoutBox = PipeBuffer()
+    let stderrBox = PipeBuffer()
+    let stdoutDone = DispatchSemaphore(value: 0)
+    let stderrDone = DispatchSemaphore(value: 0)
+    DispatchQueue.global(qos: .userInitiated).async {
+      stdoutBox.data = out.fileHandleForReading.readDataToEndOfFile()
+      stdoutDone.signal()
     }
-    timer.resume()
+    DispatchQueue.global(qos: .userInitiated).async {
+      stderrBox.data = err.fileHandleForReading.readDataToEndOfFile()
+      stderrDone.signal()
+    }
 
-    let stdout = out.fileHandleForReading.readDataToEndOfFile()
-    let stderr = err.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    timer.cancel()
+    let timedOut = finished.wait(timeout: .now() + timeout) == .timedOut
+    if timedOut || process.isRunning {
+      kill(-group, SIGTERM)
+      if finished.wait(timeout: .now() + 1) == .timedOut {
+        kill(-group, SIGKILL)
+        _ = finished.wait(timeout: .now() + 1)
+      }
+    } else {
+      // El padre ya terminó. El MCP hijo puede seguir con el pipe abierto.
+      kill(-group, SIGTERM)
+    }
+
+    let stdoutLate = stdoutDone.wait(timeout: .now() + 1) == .timedOut
+    let stderrLate = stderrDone.wait(timeout: .now() + 1) == .timedOut
+    if stdoutLate || stderrLate {
+      kill(-group, SIGKILL)
+      if stdoutLate { _ = stdoutDone.wait(timeout: .now() + 2) }
+      if stderrLate { _ = stderrDone.wait(timeout: .now() + 2) }
+    }
 
     return CommandResult(
-      stdout: String(data: stdout, encoding: .utf8) ?? "",
-      stderr: String(data: stderr, encoding: .utf8) ?? "",
-      code: process.terminationStatus,
-      timedOut: timedOut.value
+      stdout: String(data: stdoutBox.data, encoding: .utf8) ?? "",
+      stderr: String(data: stderrBox.data, encoding: .utf8) ?? "",
+      code: process.isRunning ? 1 : process.terminationStatus,
+      timedOut: timedOut
     )
   }
 
@@ -233,6 +257,6 @@ enum ClaudeLocator {
   }
 }
 
-private final class TimedFlag: @unchecked Sendable {
-  var value = false
+private final class PipeBuffer: @unchecked Sendable {
+  var data = Data()
 }

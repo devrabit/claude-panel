@@ -188,20 +188,22 @@ final class PanelModel {
         arguments: ["mcp", "list"],
         cwd: cwd,
         environment: env,
-        timeout: 90
+        timeout: 120
       )
     }.value
 
-    if result.timedOut {
-      error = "La revisión superó 90 segundos."
-      return
-    }
-
     let parsed = McpListParser.parse(result.stdout)
     if parsed.isEmpty {
-      let message = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-      error = message.isEmpty ? "claude mcp list no devolvió servidores (código \(result.code))." : message
+      if result.timedOut {
+        error = "La revisión superó 120 segundos."
+      } else {
+        let message = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        error = message.isEmpty ? "claude mcp list no devolvió servidores (código \(result.code))." : message
+      }
       return
+    }
+    if result.timedOut {
+      error = "La revisión superó 120 segundos. Mostrando lo que alcanzó a responder."
     }
 
     servers = parsed

@@ -102,11 +102,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     statusItem = item
 
     model.refresh()
-    timer = Timer.scheduledTimer(withTimeInterval: 180, repeats: true) { [weak self] _ in
+    let timer = Timer(timeInterval: 180, repeats: true) { [weak self] _ in
       Task { @MainActor in
         self?.model.refresh()
       }
     }
+    RunLoop.main.add(timer, forMode: .common)
+    self.timer = timer
 
     watchSize()
   }
